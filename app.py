@@ -22,15 +22,19 @@ client = RESTClient(
     api_secret=os.getenv("COINBASE_API_SECRET")
 )
 
-# Load models into a dictionary for easy access (as per Gemini's suggestion)
+# Load models into a dictionary for easy access
 models = {
-    "BTC-USD": joblib.load('trade_filter_model_BTC-USD.pkl'),
-    "ETH-USD": joblib.load('trade_filter_model_ETH-USD.pkl'),
-    "SOL-USD": joblib.load('trade_filter_model_SOL-USD.pkl'),
-    "XRP-USD": joblib.load('trade_filter_model_XRP-USD.pkl'),
-    "ADA-USD": joblib.load('trade_filter_model_ADA-USD.pkl'),
-    "LINK-USD": joblib.load('trade_filter_model_LINK-USD.pkl')
+    "BTC-USD": joblib.load('model_BTC_USD.pkl'),
+    "ETH-USD": joblib.load('model_ETH_USD.pkl'),
+    "SOL-USD': joblib.load('model_SOL_USD.pkl'),
+    "XRP-USD": joblib.load('model_XRP_USD.pkl'),
+    "ADA-USD": joblib.load('model_ADA_USD.pkl'),
+    "LINK-USD": joblib.load('model_LINK_USD.pkl')
 }
+
+@app.route('/', methods=['GET'])
+def home():
+    return "Coinbase Trading Bot is running. Use /webhook for signals.", 200
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -71,7 +75,6 @@ def webhook():
         df_recent['atr'] = true_range.rolling(window=14).mean()
         df_recent['volume_ma'] = df_recent['volume'].rolling(window=14).mean()
         df_recent['volume_ratio'] = df_recent['volume'] / df_recent['volume_ma']
-        df_recent['volume_delta'] = df_recent['volume'] - df_recent['volume'].rolling(window=24).mean()
         df_recent['rsi'] = momentum.RSIIndicator(df_recent['close']).rsi()
         df_recent['rsi_slope'] = df_recent['rsi'] - df_recent['rsi'].shift(1)
         df_recent['atr_ratio'] = df_recent['atr'] / df_recent['close']
@@ -84,10 +87,10 @@ def webhook():
         if df_recent.empty:
             return jsonify({"status": "insufficient_data"}), 400
         
-        features = ['log_return', 'atr_ratio', 'volume_ratio', 'volume_delta', 'rsi', 'rsi_slope', 'macd', 'macd_signal']
+        features = ['log_return', 'atr_ratio', 'volume_ratio', 'rsi', 'rsi_slope', 'macd', 'macd_signal']
         latest_features = df_recent.iloc[-1][features].values.reshape(1, -1)
 
-        # Predict probability of profitable trade (Gemini's logic)
+        # Predict probability of profitable trade
         prob = model.predict_proba(latest_features)[0][1]  # Prob of class 1
         print(f"Model Confidence for {product_id}: {prob:.2%}")
 
