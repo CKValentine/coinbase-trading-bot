@@ -62,9 +62,24 @@ def webhook():
             granularity=granularity
         )
         candles = response['candles']
-        df_recent = pd.DataFrame(candles)
-        df_recent.columns = ['start', 'low', 'high', 'open', 'close', 'volume']  # Force columns if needed
-        df_recent['start'] = df_recent['start'].astype(int)  # Ensure int for timestamp
+        
+        # Convert Candle objects to dicts if necessary
+        candles_list = []
+        for c in candles:
+            if hasattr(c, '__dict__'):
+                candles_list.append(c.__dict__)
+            else:
+                candles_list.append(c)
+        
+        df_recent = pd.DataFrame(candles_list)
+        
+        # If still single column, expand it
+        if len(df_recent.columns) == 1:
+            df_recent = pd.DataFrame(df_recent.iloc[:, 0].tolist())
+        
+        # Force the expected columns
+        df_recent.columns = ['start', 'low', 'high', 'open', 'close', 'volume']
+        df_recent['start'] = df_recent['start'].astype(int)
         df_recent['timestamp'] = pd.to_datetime(df_recent['start'], unit='s')
         df_recent[['low', 'high', 'open', 'close', 'volume']] = df_recent[['low', 'high', 'open', 'close', 'volume']].astype(float)
 
