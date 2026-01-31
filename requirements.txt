@@ -1,0 +1,12 @@
+flask
+coinbase-advanced-py
+python-dotenv
+pandas
+numpy
+scikit-learn
+joblib
+ta
+imbalanced-learn
+xgboost
+requests  # For API calls in download script
+ccxt  # For potential Kraken integration
