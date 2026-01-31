@@ -62,26 +62,13 @@ def webhook():
             granularity=granularity
         )
         candles = response['candles']
-        
-        # Convert Candle objects to dicts if necessary
-        candles_list = []
-        for c in candles:
-            if hasattr(c, '__dict__'):
-                candles_list.append(c.__dict__)
-            else:
-                candles_list.append(c)
-        
-        df_recent = pd.DataFrame(candles_list)
-        
-        # If still single column, expand it
-        if len(df_recent.columns) == 1:
-            df_recent = pd.DataFrame(df_recent.iloc[:, 0].tolist())
-        
-        # Force the expected columns
-        df_recent.columns = ['start', 'low', 'high', 'open', 'close', 'volume']
-        df_recent['start'] = df_recent['start'].astype(int)
-        df_recent['timestamp'] = pd.to_datetime(df_recent['start'], unit='s')
+        df_recent = pd.DataFrame(candles)
         df_recent[['low', 'high', 'open', 'close', 'volume']] = df_recent[['low', 'high', 'open', 'close', 'volume']].astype(float)
+        df_recent['start'] = pd.to_datetime(df_recent['start'], unit='s')
+
+        # Check for sufficient data
+        if len(df_recent) < 14:
+            return jsonify({"status": "insufficient_data", "message": "Only {len(df_recent)} candles fetched—need at least 14 for features."}), 400
 
         # Engineer features (matching training)
         df_recent['log_return'] = np.log(df_recent['close'] / df_recent['close'].shift(1))
@@ -91,7 +78,7 @@ def webhook():
         true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
         df_recent['atr'] = true_range.rolling(window=14).mean()
         df_recent['volume_ma'] = df_recent['volume'].rolling(window=14).mean()
-        df_recent['volume_ratio'] = df_recent['volume'] / df_recent['volume_ma']
+        df_recent['volume_ratio'] = df_recent['volume'] / df['volume_ma']
         df_recent['rsi'] = momentum.RSIIndicator(df_recent['close']).rsi()
         df_recent['rsi_slope'] = df_recent['rsi'] - df_recent['rsi'].shift(1)
         df_recent['atr_ratio'] = df_recent['atr'] / df_recent['close']
