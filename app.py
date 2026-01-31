@@ -62,7 +62,11 @@ def webhook():
             granularity=granularity
         )
         candles = response['candles']
-        df_recent = pd.DataFrame(candles)
+        # Convert if objects
+        candles_list = [candle.__dict__ if hasattr(candle, '__dict__') else candle for candle in candles]
+        df_recent = pd.DataFrame(candles_list)
+        if 'close' not in df_recent.columns:
+            return jsonify({"status": "error", "message": "No data fetched or invalid format"}), 400
         df_recent[['low', 'high', 'open', 'close', 'volume']] = df_recent[['low', 'high', 'open', 'close', 'volume']].astype(float)
         df_recent['start'] = pd.to_datetime(df_recent['start'], unit='s')
 
@@ -74,7 +78,7 @@ def webhook():
         true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
         df_recent['atr'] = true_range.rolling(window=14).mean()
         df_recent['volume_ma'] = df_recent['volume'].rolling(window=14).mean()
-        df_recent['volume_ratio'] = df_recent['volume'] / df_recent['volume_ma']
+        df_recent['volume_ratio'] = df_recent['volume'] / df['volume_ma']
         df_recent['rsi'] = momentum.RSIIndicator(df_recent['close']).rsi()
         df_recent['rsi_slope'] = df_recent['rsi'] - df_recent['rsi'].shift(1)
         df_recent['atr_ratio'] = df_recent['atr'] / df_recent['close']
