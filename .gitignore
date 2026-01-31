@@ -1,0 +1,9 @@
+# .gitignore
+.env
+*.pkl  # Models
+*_hourly.csv  # Large data
+simulated_balance.txt
+trade_log.csv
+venv/  # Virtual env
+__pycache__/
+*.pyc
