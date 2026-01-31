@@ -6,24 +6,20 @@ import numpy as np
 import joblib
 from coinbase.rest import RESTClient
 from dotenv import load_dotenv
-from ta import momentum, trend  # For RSI and MACD
-import uuid  # Add this at the top for client_order_id
+from ta import momentum, trend
 
-# Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
 
-# Security: Set a secret passphrase from .env
 PASSPHRASE = os.getenv("TV_SECRET")
 
-# Initialize Coinbase client with keys from .env
 client = RESTClient(
     api_key=os.getenv("COINBASE_API_KEY"),
     api_secret=os.getenv("COINBASE_API_SECRET")
 )
 
-# Load models into a dictionary for easy access
+# Load models
 models = {
     "BTC-USD": joblib.load('model_BTC_USD.pkl'),
     "ETH-USD": joblib.load('model_ETH_USD.pkl'),
@@ -33,9 +29,10 @@ models = {
     "LINK-USD": joblib.load('model_LINK_USD.pkl')
 }
 
+# Home route - shows when you visit the URL in browser
 @app.route('/', methods=['GET'])
 def home():
-    return "Coinbase Trading Bot is running. Use /webhook for signals.", 200
+    return "✅ Coinbase Trading Bot is LIVE!<br>Use /webhook for TradingView signals.", 200
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -45,47 +42,57 @@ def webhook():
 
     product_id = data['ticker']
     model = models.get(product_id)
-    
-    # 1. Fetch Data (SDK Fix)
+
+    if not model:
+        return jsonify({"status": "error", "message": "No model found"}), 400
+
+    # Fetch recent data
     try:
         response = client.get_public_candles(
             product_id=product_id,
-            start=str(int(time.time() - 36000)), # Fetch 10 hours
+            start=str(int(time.time() - 36000)),  # 10 hours
             end=str(int(time.time())),
             granularity='ONE_HOUR'
         )
-        
-        # FIX: Access as object attribute
-        candles = [vars(c) for c in response.candles] 
+
+        candles = response['candles']
         df = pd.DataFrame(candles)
-        
-        # 2. Indicator logic (Ensure 'df' naming is consistent)
-        df['close'] = df['close'].astype(float)
+        df.columns = ['start', 'low', 'high', 'open', 'close', 'volume']
+        df['start'] = df['start'].astype(int)
+        df['timestamp'] = pd.to_datetime(df['start'], unit='s')
+
+        # Feature Engineering
+        df['log_return'] = np.log(df['close'] / df['close'].shift(1))
+        df['atr_ratio'] = volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range() / df['close']
+        df['volume_ratio'] = df['volume'] / df['volume'].rolling(14).mean()
         df['rsi'] = momentum.RSIIndicator(df['close']).rsi()
-        # ... (rest of your indicators) ...
+        df['rsi_slope'] = df['rsi'] - df['rsi'].shift(1)
+        macd = trend.MACD(df['close'])
+        df['macd_diff'] = macd.macd() - macd.macd_signal()
 
-        # 3. Model Prediction (Feature Name Fix)
-        features = ['log_return', 'atr_ratio', 'volume_ratio', 'rsi', 'rsi_slope', 'macd', 'macd_signal']
-        latest_row = df[features].iloc[-1:] # Keep as DataFrame to preserve column names
+        df.dropna(inplace=True)
+        if df.empty:
+            return jsonify({"status": "insufficient_data"}), 400
 
-        prob = model.predict_proba(latest_row)[0][1]
-        
-        # 4. Execution (UUID & Quote Size Fix)
+        features = ['log_return', 'atr_ratio', 'volume_ratio', 'rsi', 'rsi_slope', 'macd_diff']
+        latest = df[features].iloc[-1:].copy()
+
+        prob = model.predict_proba(latest)[0][1]
+
+        print(f"[{product_id}] Confidence: {prob:.2%}")
+
         if prob > 0.60 and data['action'] == 'buy':
-            # Coinbase requires a unique ID for every order attempt
-            order_id = str(uuid.uuid4()) 
-            
             order_response = client.market_order_buy(
-                client_order_id=order_id,
                 product_id=product_id,
-                quote_size=str(data['size']) # Must be a string
+                quote_size=str(data['size'])
             )
-            
-            return jsonify({"status": "success", "order": str(order_response)}), 200
-            
+            return jsonify({"status": "trade_executed", "prob": prob}), 200
+        else:
+            return jsonify({"status": "trade_filtered_out", "prob": prob}), 200
+
     except Exception as e:
-        print(f"Error: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=80)
