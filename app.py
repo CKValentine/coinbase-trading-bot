@@ -26,7 +26,7 @@ client = RESTClient(
 models = {
     "BTC-USD": joblib.load('model_BTC_USD.pkl'),
     "ETH-USD": joblib.load('model_ETH_USD.pkl'),
-    "SOL-USD': joblib.load('model_SOL_USD.pkl'),
+    "SOL-USD": joblib.load('model_SOL_USD.pkl'),
     "XRP-USD": joblib.load('model_XRP_USD.pkl'),
     "ADA-USD": joblib.load('model_ADA_USD.pkl'),
     "LINK-USD": joblib.load('model_LINK_USD.pkl')
