@@ -366,8 +366,69 @@ def dashboard():
     wins         = len([t for t in closed if t.get('pnl', 0) > 0])
     win_rate     = round(wins / total_trades * 100, 1) if total_trades else 0
     total_pnl    = round(sum(t.get('pnl', 0) for t in closed), 4)
+    win_color    = "green" if win_rate >= 50 else "red"
+    pnl_color    = "green" if total_pnl >= 0 else "red"
+    pnl_sign     = "+" if total_pnl >= 0 else ""
 
-    html = f"""<!DOCTYPE html>
+    # Build open positions rows
+    pos_rows = ""
+    if not enriched:
+        pos_rows = '<p class="empty">No open positions</p>'
+    else:
+        rows = ""
+        for pair, p in enriched.items():
+            pct      = p["unrealised_pct"]
+            pc       = "green" if p["unrealised_pnl"] >= 0 else "red"
+            opened   = p["opened_at"][:16].replace("T", " ")
+            conf     = round(p.get("prob", 0) * 100, 1)
+            rows += (
+                "<tr>"
+                "<td><strong>" + pair + "</strong></td>"
+                "<td>$" + "{:,.4f}".format(p["entry_price"]) + "</td>"
+                "<td>$" + "{:,.4f}".format(p["current_price"]) + "</td>"
+                '<td><span class="badge ' + pc + '">' + "{:+.2f}".format(pct) + "%</span></td>"
+                "<td>$" + "{:,.4f}".format(p["stop_price"]) + "</td>"
+                "<td>$" + "{:,.4f}".format(p["target_price"]) + "</td>"
+                "<td>" + str(conf) + "%</td>"
+                "<td>" + opened + "</td>"
+                "</tr>"
+            )
+        pos_rows = (
+            "<table><tr><th>Pair</th><th>Entry</th><th>Current</th>"
+            "<th>P&amp;L</th><th>Stop</th><th>Target</th>"
+            "<th>Confidence</th><th>Opened</th></tr>"
+            + rows + "</table>"
+        )
+
+    # Build trade history rows
+    hist_rows = ""
+    if not closed:
+        hist_rows = '<p class="empty">No closed trades yet</p>'
+    else:
+        rows = ""
+        for t in reversed(closed[-20:]):
+            pc      = "green" if t.get("pnl", 0) >= 0 else "red"
+            pct_val = t.get("pnl_pct", 0)
+            ts      = t["timestamp"][:16].replace("T", " ")
+            rows += (
+                "<tr>"
+                "<td><strong>" + t["product_id"] + "</strong></td>"
+                "<td>$" + "{:,.4f}".format(t.get("entry_price", 0)) + "</td>"
+                "<td>$" + "{:,.4f}".format(t.get("exit_price", 0)) + "</td>"
+                '<td><span class="badge ' + pc + '">' + "{:+.2f}".format(pct_val) + "%</span></td>"
+                '<td><span class="badge blue">' + t.get("reason", "signal") + "</span></td>"
+                "<td>" + ts + "</td>"
+                "</tr>"
+            )
+        hist_rows = (
+            "<table><tr><th>Pair</th><th>Entry</th><th>Exit</th>"
+            "<th>P&amp;L</th><th>Reason</th><th>Time</th></tr>"
+            + rows + "</table>"
+        )
+
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+
+    html = """<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
@@ -375,90 +436,41 @@ def dashboard():
 <meta http-equiv="refresh" content="60">
 <title>Trading Bot Dashboard</title>
 <style>
-  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{ font-family: -apple-system, sans-serif; background: #0f0f0f; color: #e0e0e0; padding: 20px; }}
-  h1 {{ font-size: 20px; font-weight: 500; margin-bottom: 20px; color: #fff; }}
-  h2 {{ font-size: 13px; font-weight: 500; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }}
-  .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }}
-  .card {{ background: #1a1a1a; border: 0.5px solid #333; border-radius: 10px; padding: 16px; }}
-  .card .label {{ font-size: 12px; color: #888; margin-bottom: 6px; }}
-  .card .value {{ font-size: 24px; font-weight: 500; color: #fff; }}
-  .card .value.green {{ color: #4caf50; }}
-  .card .value.red {{ color: #f44336; }}
-  table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
-  th {{ text-align: left; padding: 8px 12px; color: #888; font-weight: 400; border-bottom: 0.5px solid #333; }}
-  td {{ padding: 10px 12px; border-bottom: 0.5px solid #222; }}
-  tr:last-child td {{ border-bottom: none; }}
-  .section {{ background: #1a1a1a; border: 0.5px solid #333; border-radius: 10px; padding: 16px; margin-bottom: 20px; }}
-  .badge {{ display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }}
-  .badge.green {{ background: #1a3a1a; color: #4caf50; }}
-  .badge.red {{ background: #3a1a1a; color: #f44336; }}
-  .badge.blue {{ background: #1a2a3a; color: #64b5f6; }}
-  .timestamp {{ font-size: 11px; color: #555; margin-top: 8px; }}
-  .empty {{ color: #555; font-size: 13px; padding: 16px 0; }}
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, sans-serif; background: #0f0f0f; color: #e0e0e0; padding: 20px; }
+  h1 { font-size: 20px; font-weight: 500; margin-bottom: 20px; color: #fff; }
+  h2 { font-size: 13px; font-weight: 500; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .card { background: #1a1a1a; border: 0.5px solid #333; border-radius: 10px; padding: 16px; }
+  .card .label { font-size: 12px; color: #888; margin-bottom: 6px; }
+  .card .value { font-size: 24px; font-weight: 500; color: #fff; }
+  .card .value.green { color: #4caf50; }
+  .card .value.red { color: #f44336; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 8px 12px; color: #888; font-weight: 400; border-bottom: 0.5px solid #333; }
+  td { padding: 10px 12px; border-bottom: 0.5px solid #222; }
+  tr:last-child td { border-bottom: none; }
+  .section { background: #1a1a1a; border: 0.5px solid #333; border-radius: 10px; padding: 16px; margin-bottom: 20px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+  .badge.green { background: #1a3a1a; color: #4caf50; }
+  .badge.red { background: #3a1a1a; color: #f44336; }
+  .badge.blue { background: #1a2a3a; color: #64b5f6; }
+  .timestamp { font-size: 11px; color: #555; margin-top: 8px; }
+  .empty { color: #555; font-size: 13px; padding: 16px 0; }
 </style>
 </head>
 <body>
-<h1>🤖 Coinbase Trading Bot</h1>
-
+<h1>&#x1F916; Coinbase Trading Bot</h1>
 <div class="grid">
-  <div class="card">
-    <div class="label">USD Available</div>
-    <div class="value">${usd:,.2f}</div>
-  </div>
-  <div class="card">
-    <div class="label">Open Positions</div>
-    <div class="value">{len(enriched)}</div>
-  </div>
-  <div class="card">
-    <div class="label">Total Trades</div>
-    <div class="value">{total_trades}</div>
-  </div>
-  <div class="card">
-    <div class="label">Win Rate</div>
-    <div class="value {'green' if win_rate >= 50 else 'red'}">{win_rate}%</div>
-  </div>
-  <div class="card">
-    <div class="label">Total P&L</div>
-    <div class="value {'green' if total_pnl >= 0 else 'red'}">${total_pnl:+,.4f}</div>
-  </div>
+  <div class="card"><div class="label">USD Available</div><div class="value">$""" + "{:,.2f}".format(usd) + """</div></div>
+  <div class="card"><div class="label">Open Positions</div><div class="value">""" + str(len(enriched)) + """</div></div>
+  <div class="card"><div class="label">Total Trades</div><div class="value">""" + str(total_trades) + """</div></div>
+  <div class="card"><div class="label">Win Rate</div><div class="value """ + win_color + """">""" + str(win_rate) + """%</div></div>
+  <div class="card"><div class="label">Total P&amp;L</div><div class="value """ + pnl_color + """">$""" + pnl_sign + "{:,.4f}".format(total_pnl) + """</div></div>
 </div>
-
-<div class="section">
-  <h2>Open Positions</h2>
-  {'<p class="empty">No open positions</p>' if not enriched else f'''
-  <table>
-    <tr><th>Pair</th><th>Entry</th><th>Current</th><th>P&L</th><th>Stop</th><th>Target</th><th>Confidence</th><th>Opened</th></tr>
-    {"".join(f'''<tr>
-      <td><strong>{pair}</strong></td>
-      <td>${p["entry_price"]:,.4f}</td>
-      <td>${p["current_price"]:,.4f}</td>
-      <td><span class="badge {'green' if p['unrealised_pnl'] >= 0 else 'red'}">{p["unrealised_pct"]:+.2f}%</span></td>
-      <td>${p["stop_price"]:,.4f}</td>
-      <td>${p["target_price"]:,.4f}</td>
-      <td>{round(p.get("prob", 0)*100, 1)}%</td>
-      <td>{p["opened_at"][:16].replace("T", " ")}</td>
-    </tr>''' for pair, p in enriched.items())}
-  </table>'''}
-</div>
-
-<div class="section">
-  <h2>Trade History</h2>
-  {'<p class="empty">No closed trades yet</p>' if not closed else f'''
-  <table>
-    <tr><th>Pair</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Reason</th><th>Time</th></tr>
-    {"".join(f'''<tr>
-      <td><strong>{t["product_id"]}</strong></td>
-      <td>${t.get("entry_price", 0):,.4f}</td>
-      <td>${t.get("exit_price", 0):,.4f}</td>
-      <td><span class="badge {'green' if t.get('pnl', 0) >= 0 else 'red'}">{t.get('pnl_pct', 0):+.2f}%</span></td>
-      <td><span class="badge blue">{t.get("reason", "signal")}</span></td>
-      <td>{t["timestamp"][:16].replace("T", " ")}</td>
-    </tr>''' for t in reversed(closed[-20:]))}
-  </table>'''}
-</div>
-
-<div class="timestamp">Auto-refreshes every 60s · {datetime.utcnow().strftime("%Y-%m-%d %H:%M")} UTC</div>
+<div class="section"><h2>Open Positions</h2>""" + pos_rows + """</div>
+<div class="section"><h2>Trade History</h2>""" + hist_rows + """</div>
+<div class="timestamp">Auto-refreshes every 60s &middot; """ + now + """ UTC</div>
 </body>
 </html>"""
     return html, 200
