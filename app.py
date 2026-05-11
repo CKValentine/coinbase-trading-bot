@@ -28,16 +28,15 @@ client = RESTClient(
 # Per-pair configuration
 # ---------------------------------------------------------------------------
 PAIR_CONFIG = {
-    "BTC-USD":  dict(buy_threshold=0.53, sell_threshold=0.48),
-    "ETH-USD":  dict(buy_threshold=0.58, sell_threshold=0.52),
-    "SOL-USD":  dict(buy_threshold=0.58, sell_threshold=0.52),  # re-enabled
-    "XRP-USD":  dict(buy_threshold=0.58, sell_threshold=0.52),
-    "ADA-USD":  dict(buy_threshold=0.58, sell_threshold=0.52),
-    "LINK-USD": dict(buy_threshold=0.58, sell_threshold=0.52),
+    "BTC-USD":  dict(buy_threshold=0.53, sell_threshold=0.48, risk_pct=0.20),
+    "ETH-USD":  dict(buy_threshold=0.58, sell_threshold=0.52, risk_pct=0.20),
+    "SOL-USD":  dict(buy_threshold=0.58, sell_threshold=0.52, risk_pct=0.20),
+    "XRP-USD":  dict(buy_threshold=0.58, sell_threshold=0.52, risk_pct=0.20),
+    "ADA-USD":  dict(buy_threshold=0.58, sell_threshold=0.52, risk_pct=0.10),
+    "LINK-USD": dict(buy_threshold=0.58, sell_threshold=0.52, risk_pct=0.20),
 }
 
-SUPPORTED_PAIRS    = list(PAIR_CONFIG.keys())
-RISK_PER_TRADE_PCT = 0.20
+SUPPORTED_PAIRS = list(PAIR_CONFIG.keys())
 STOP_LOSS_PCT      = 0.02
 TAKE_PROFIT_PCT    = 0.04
 
@@ -527,7 +526,7 @@ def webhook():
                 }), 200
 
             usd_balance = get_available_usd_balance()
-            quote_size  = round(usd_balance * RISK_PER_TRADE_PCT, 2)
+            quote_size  = round(usd_balance * cfg['risk_pct'], 2)
 
             if quote_size < 1.0:
                 return jsonify({"status": "insufficient_balance", "usd_available": usd_balance}), 200
