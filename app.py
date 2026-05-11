@@ -28,7 +28,6 @@ client = RESTClient(
 # Per-pair configuration
 # ---------------------------------------------------------------------------
 PAIR_CONFIG = {
-   PAIR_CONFIG = {
     "BTC-USD":  dict(buy_threshold=0.53, sell_threshold=0.48),
     "ETH-USD":  dict(buy_threshold=0.58, sell_threshold=0.52),
     "SOL-USD":  dict(buy_threshold=0.58, sell_threshold=0.52),  # re-enabled
