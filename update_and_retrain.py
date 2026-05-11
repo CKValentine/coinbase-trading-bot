@@ -316,3 +316,23 @@ if __name__ == "__main__":
     for r in results:
         print(f"{r['pair']:>10} {r['trades']:>8} {r['win_rate']:>10.1%} {r['profit']:>10.1%} {r['drawdown']:>12.1%}")
     print(f"{'='*50}\n")
+
+    # Telegram summary
+    try:
+        token   = os.getenv('TELEGRAM_TOKEN')
+        chat_id = os.getenv('TELEGRAM_CHAT_ID')
+        if token and chat_id:
+            lines = ["📊 <b>Weekly retrain complete</b>"]
+            for r in results:
+                emoji = "✅" if r['win_rate'] >= 0.60 else "⚠️"
+                lines.append(
+                    f"{emoji} {r['pair']}: {r['trades']} trades, "
+                    f"{r['win_rate']:.0%} win, {r['profit']:+.0%} profit"
+                )
+            requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat_id, "text": "\n".join(lines), "parse_mode": "HTML"},
+                timeout=5
+            )
+    except Exception as e:
+        print(f"Telegram notify failed: {e}")

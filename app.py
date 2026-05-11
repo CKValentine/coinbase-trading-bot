@@ -5,6 +5,25 @@ import time
 import threading
 import requests as http_requests
 import yfinance as yf
+
+# ---------------------------------------------------------------------------
+# Telegram notifications
+# ---------------------------------------------------------------------------
+TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+def notify(message: str):
+    """Send a Telegram message. Fails silently so it never blocks trading."""
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    try:
+        http_requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"},
+            timeout=5
+        )
+    except Exception as e:
+        print(f"Telegram notify failed: {e}")
 import pandas as pd
 import numpy as np
 import joblib
@@ -33,7 +52,7 @@ PAIR_CONFIG = {
     "SOL-USD":  dict(buy_threshold=0.58, sell_threshold=0.52, risk_pct=0.20),
     "XRP-USD":  dict(buy_threshold=0.58, sell_threshold=0.52, risk_pct=0.20),
     "ADA-USD":  dict(buy_threshold=0.58, sell_threshold=0.52, risk_pct=0.10),
-    "LINK-USD": dict(buy_threshold=0.65, sell_threshold=0.52, risk_pct=0.15),
+    "LINK-USD": dict(buy_threshold=0.58, sell_threshold=0.52, risk_pct=0.20),
 }
 
 SUPPORTED_PAIRS = list(PAIR_CONFIG.keys())
@@ -569,6 +588,16 @@ def webhook():
                 quote_size, round(prob, 4)
             )
 
+            notify(
+                f"🟢 <b>BUY EXECUTED</b>\n"
+                f"Pair:       {product_id}\n"
+                f"Price:      ${current_price:,.4f}\n"
+                f"Size:       ${quote_size:.2f}\n"
+                f"Confidence: {prob:.1%}\n"
+                f"Stop loss:  ${stop_price:,.4f}\n"
+                f"Take profit: ${target_price:,.4f}"
+            )
+
             return jsonify({
                 "status":         "buy_executed",
                 "product_id":     product_id,
@@ -605,6 +634,19 @@ def webhook():
 
             close_position(product_id, exit_price=current_price, reason="signal")
 
+            positions = load_positions()
+            entry = positions.get(product_id, {}).get('entry_price', current_price)
+            pnl_pct = (current_price / entry - 1) * 100 if entry else 0
+            emoji = "🟢" if pnl_pct >= 0 else "🔴"
+
+            notify(
+                f"{emoji} <b>SELL EXECUTED</b>\n"
+                f"Pair:       {product_id}\n"
+                f"Exit price: ${current_price:,.4f}\n"
+                f"P&amp;L:        {pnl_pct:+.2f}%\n"
+                f"Confidence: {prob:.1%}"
+            )
+
             return jsonify({
                 "status":     "sell_executed",
                 "product_id": product_id,
@@ -616,8 +658,10 @@ def webhook():
 
     except Exception as e:
         print(f"[{product_id}] ERROR: {e}")
+        notify(f"⚠️ <b>BOT ERROR</b>\nPair: {product_id}\nAction: {action}\nError: {str(e)[:200]}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
 if __name__ == "__main__":
+    notify("🤖 <b>Trading bot started</b>\nPairs: " + ", ".join(SUPPORTED_PAIRS))
     app.run(host='0.0.0.0', port=80)
