@@ -64,8 +64,9 @@ def load_fear_greed():
 
 def load_macro():
     try:
-        dxy  = yf.download('DX-Y.NYB', start='2016-01-01', progress=False)['Close']
-        gold = yf.download('GC=F',     start='2016-01-01', progress=False)['Close']
+        # .squeeze() converts yfinance MultiIndex columns to a plain Series
+        dxy  = yf.download('DX-Y.NYB', start='2016-01-01', progress=False)['Close'].squeeze()
+        gold = yf.download('GC=F',     start='2016-01-01', progress=False)['Close'].squeeze()
         macro = pd.DataFrame({'dxy_return': dxy.pct_change(), 'gold_return': gold.pct_change()})
         macro.index = pd.to_datetime(macro.index).date
         macro = macro.dropna()
