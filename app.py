@@ -4,6 +4,7 @@ import json
 import time
 import threading
 import requests as http_requests
+import yfinance as yf
 import pandas as pd
 import numpy as np
 import joblib
@@ -24,7 +25,7 @@ client = RESTClient(
 )
 
 # ---------------------------------------------------------------------------
-# Per-pair configuration — thresholds match train_and_backtest.py
+# Per-pair configuration
 # ---------------------------------------------------------------------------
 PAIR_CONFIG = {
     "BTC-USD":  dict(buy_threshold=0.53, sell_threshold=0.48),
@@ -47,10 +48,12 @@ models   = {pair: _raw[pair]['model']    for pair in SUPPORTED_PAIRS}
 features = {pair: _raw[pair]['features'] for pair in SUPPORTED_PAIRS}
 
 # ---------------------------------------------------------------------------
-# Position tracking
+# Position & trade history tracking
 # ---------------------------------------------------------------------------
-POSITIONS_FILE  = "positions.json"
-_positions_lock = threading.Lock()
+POSITIONS_FILE    = "positions.json"
+TRADE_HISTORY_FILE = "trade_history.json"
+_positions_lock   = threading.Lock()
+_history_lock     = threading.Lock()
 
 
 def load_positions() -> dict:
@@ -68,8 +71,25 @@ def save_positions(positions: dict):
         json.dump(positions, f, indent=2)
 
 
+def load_trade_history() -> list:
+    if not os.path.exists(TRADE_HISTORY_FILE):
+        return []
+    try:
+        with open(TRADE_HISTORY_FILE, 'r') as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def log_trade(entry: dict):
+    with _history_lock:
+        history = load_trade_history()
+        history.append(entry)
+        with open(TRADE_HISTORY_FILE, 'w') as f:
+            json.dump(history, f, indent=2)
+
+
 def has_open_position(product_id: str) -> bool:
-    """Check local state, auto-clearing if SL/TP has already filled on Coinbase."""
     with _positions_lock:
         positions = load_positions()
 
@@ -86,7 +106,7 @@ def has_open_position(product_id: str) -> bool:
             if status in ('FILLED', 'CANCELLED'):
                 with _positions_lock:
                     positions = load_positions()
-                    positions.pop(product_id, None)
+                    pos = positions.pop(product_id, None)
                     save_positions(positions)
                 print(f"[{product_id}] Position auto-cleared — order {order_id} is {status}")
                 return False
@@ -97,26 +117,59 @@ def has_open_position(product_id: str) -> bool:
 
 
 def open_position(product_id, entry_price, qty, stop_price,
-                  target_price, sl_order_id, tp_order_id):
+                  target_price, sl_order_id, tp_order_id, quote_size, prob):
     with _positions_lock:
         positions = load_positions()
         positions[product_id] = {
             "entry_price":  entry_price,
             "qty":          qty,
+            "quote_size":   quote_size,
             "stop_price":   stop_price,
             "target_price": target_price,
             "sl_order_id":  sl_order_id,
             "tp_order_id":  tp_order_id,
+            "prob":         prob,
             "opened_at":    datetime.utcnow().isoformat(),
         }
         save_positions(positions)
 
+    log_trade({
+        "type":         "buy",
+        "product_id":   product_id,
+        "entry_price":  entry_price,
+        "qty":          qty,
+        "quote_size":   quote_size,
+        "stop_price":   stop_price,
+        "target_price": target_price,
+        "prob":         prob,
+        "timestamp":    datetime.utcnow().isoformat(),
+        "status":       "open",
+    })
 
-def close_position(product_id: str):
+
+def close_position(product_id: str, exit_price: float = None, reason: str = "signal"):
     with _positions_lock:
         positions = load_positions()
-        positions.pop(product_id, None)
+        pos = positions.pop(product_id, None)
         save_positions(positions)
+
+    if pos and exit_price:
+        entry  = pos.get('entry_price', 0)
+        qty    = pos.get('qty', 0)
+        pnl    = round((exit_price - entry) * qty, 4)
+        pnl_pct = round((exit_price / entry - 1) * 100, 2) if entry else 0
+        log_trade({
+            "type":       "sell",
+            "product_id": product_id,
+            "entry_price": entry,
+            "exit_price": exit_price,
+            "qty":        qty,
+            "pnl":        pnl,
+            "pnl_pct":   pnl_pct,
+            "reason":     reason,
+            "timestamp":  datetime.utcnow().isoformat(),
+            "status":     "closed",
+        })
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +210,16 @@ def get_fear_greed() -> float:
         return 0.5
 
 
+def get_live_macro() -> tuple:
+    try:
+        dxy  = yf.Ticker('DX-Y.NYB').history(period='2d', interval='1h')['Close']
+        gold = yf.Ticker('GC=F').history(period='2d', interval='1h')['Close']
+        return float(dxy.iloc[-1] / dxy.iloc[-2] - 1), float(gold.iloc[-1] / gold.iloc[-2] - 1)
+    except Exception as e:
+        print(f"Macro fetch failed: {e}")
+        return 0.0, 0.0
+
+
 def engineer_features(df: pd.DataFrame, pair_features: list) -> pd.DataFrame:
     df = df.copy()
     df.set_index('timestamp', inplace=True)
@@ -187,10 +250,12 @@ def engineer_features(df: pd.DataFrame, pair_features: list) -> pd.DataFrame:
 
     if 'fear_greed' in pair_features:
         df['fear_greed'] = get_fear_greed()
-    if 'dxy_return' in pair_features:
-        df['dxy_return'] = 0.0
-    if 'gold_return' in pair_features:
-        df['gold_return'] = 0.0
+    if 'dxy_return' in pair_features or 'gold_return' in pair_features:
+        dxy_ret, gold_ret = get_live_macro()
+        if 'dxy_return' in pair_features:
+            df['dxy_return'] = dxy_ret
+        if 'gold_return' in pair_features:
+            df['gold_return'] = gold_ret
 
     df.dropna(inplace=True)
     return df
@@ -232,6 +297,20 @@ def get_crypto_balance(base_currency: str) -> float:
     return 0.0
 
 
+def get_current_price(product_id: str) -> float:
+    try:
+        response = client.get_public_candles(
+            product_id=product_id,
+            start=str(int(time.time() - 3600)),
+            end=str(int(time.time())),
+            granularity='ONE_HOUR'
+        )
+        candles = response['candles']
+        return float(candles[0]['close']) if candles else 0.0
+    except Exception:
+        return 0.0
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -240,8 +319,9 @@ def get_crypto_balance(base_currency: str) -> float:
 def home():
     return (
         "✅ Coinbase Trading Bot is LIVE!<br>"
-        "POST /webhook — TradingView signals<br>"
-        "GET  /status  — open positions & account info"
+        "POST /webhook   — TradingView signals<br>"
+        "GET  /status    — JSON status<br>"
+        "GET  /dashboard — Trade dashboard"
     ), 200
 
 
@@ -258,6 +338,130 @@ def status():
         "supported_pairs": SUPPORTED_PAIRS,
         "timestamp":       datetime.utcnow().isoformat()
     }), 200
+
+
+@app.route('/dashboard', methods=['GET'])
+def dashboard():
+    positions = load_positions()
+    history   = load_trade_history()
+    try:
+        usd = round(get_available_usd_balance(), 2)
+    except Exception:
+        usd = 0.0
+
+    # Enrich open positions with current price and unrealised P&L
+    enriched = {}
+    for pair, pos in positions.items():
+        current = get_current_price(pair)
+        entry   = pos.get('entry_price', 0)
+        qty     = pos.get('qty', 0)
+        unreal  = round((current - entry) * qty, 4) if entry and qty else 0
+        unreal_pct = round((current / entry - 1) * 100, 2) if entry else 0
+        enriched[pair] = {**pos, "current_price": current,
+                          "unrealised_pnl": unreal, "unrealised_pct": unreal_pct}
+
+    # Trade stats
+    closed = [t for t in history if t.get('type') == 'sell']
+    total_trades = len(closed)
+    wins         = len([t for t in closed if t.get('pnl', 0) > 0])
+    win_rate     = round(wins / total_trades * 100, 1) if total_trades else 0
+    total_pnl    = round(sum(t.get('pnl', 0) for t in closed), 4)
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="60">
+<title>Trading Bot Dashboard</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: -apple-system, sans-serif; background: #0f0f0f; color: #e0e0e0; padding: 20px; }}
+  h1 {{ font-size: 20px; font-weight: 500; margin-bottom: 20px; color: #fff; }}
+  h2 {{ font-size: 13px; font-weight: 500; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }}
+  .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }}
+  .card {{ background: #1a1a1a; border: 0.5px solid #333; border-radius: 10px; padding: 16px; }}
+  .card .label {{ font-size: 12px; color: #888; margin-bottom: 6px; }}
+  .card .value {{ font-size: 24px; font-weight: 500; color: #fff; }}
+  .card .value.green {{ color: #4caf50; }}
+  .card .value.red {{ color: #f44336; }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+  th {{ text-align: left; padding: 8px 12px; color: #888; font-weight: 400; border-bottom: 0.5px solid #333; }}
+  td {{ padding: 10px 12px; border-bottom: 0.5px solid #222; }}
+  tr:last-child td {{ border-bottom: none; }}
+  .section {{ background: #1a1a1a; border: 0.5px solid #333; border-radius: 10px; padding: 16px; margin-bottom: 20px; }}
+  .badge {{ display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }}
+  .badge.green {{ background: #1a3a1a; color: #4caf50; }}
+  .badge.red {{ background: #3a1a1a; color: #f44336; }}
+  .badge.blue {{ background: #1a2a3a; color: #64b5f6; }}
+  .timestamp {{ font-size: 11px; color: #555; margin-top: 8px; }}
+  .empty {{ color: #555; font-size: 13px; padding: 16px 0; }}
+</style>
+</head>
+<body>
+<h1>🤖 Coinbase Trading Bot</h1>
+
+<div class="grid">
+  <div class="card">
+    <div class="label">USD Available</div>
+    <div class="value">${usd:,.2f}</div>
+  </div>
+  <div class="card">
+    <div class="label">Open Positions</div>
+    <div class="value">{len(enriched)}</div>
+  </div>
+  <div class="card">
+    <div class="label">Total Trades</div>
+    <div class="value">{total_trades}</div>
+  </div>
+  <div class="card">
+    <div class="label">Win Rate</div>
+    <div class="value {'green' if win_rate >= 50 else 'red'}">{win_rate}%</div>
+  </div>
+  <div class="card">
+    <div class="label">Total P&L</div>
+    <div class="value {'green' if total_pnl >= 0 else 'red'}">${total_pnl:+,.4f}</div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>Open Positions</h2>
+  {'<p class="empty">No open positions</p>' if not enriched else f'''
+  <table>
+    <tr><th>Pair</th><th>Entry</th><th>Current</th><th>P&L</th><th>Stop</th><th>Target</th><th>Confidence</th><th>Opened</th></tr>
+    {"".join(f'''<tr>
+      <td><strong>{pair}</strong></td>
+      <td>${p["entry_price"]:,.4f}</td>
+      <td>${p["current_price"]:,.4f}</td>
+      <td><span class="badge {'green' if p['unrealised_pnl'] >= 0 else 'red'}">{p["unrealised_pct"]:+.2f}%</span></td>
+      <td>${p["stop_price"]:,.4f}</td>
+      <td>${p["target_price"]:,.4f}</td>
+      <td>{round(p.get("prob", 0)*100, 1)}%</td>
+      <td>{p["opened_at"][:16].replace("T", " ")}</td>
+    </tr>''' for pair, p in enriched.items())}
+  </table>'''}
+</div>
+
+<div class="section">
+  <h2>Trade History</h2>
+  {'<p class="empty">No closed trades yet</p>' if not closed else f'''
+  <table>
+    <tr><th>Pair</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Reason</th><th>Time</th></tr>
+    {"".join(f'''<tr>
+      <td><strong>{t["product_id"]}</strong></td>
+      <td>${t.get("entry_price", 0):,.4f}</td>
+      <td>${t.get("exit_price", 0):,.4f}</td>
+      <td><span class="badge {'green' if t.get('pnl', 0) >= 0 else 'red'}">{t.get('pnl_pct', 0):+.2f}%</span></td>
+      <td><span class="badge blue">{t.get("reason", "signal")}</span></td>
+      <td>{t["timestamp"][:16].replace("T", " ")}</td>
+    </tr>''' for t in reversed(closed[-20:]))}
+  </table>'''}
+</div>
+
+<div class="timestamp">Auto-refreshes every 60s · {datetime.utcnow().strftime("%Y-%m-%d %H:%M")} UTC</div>
+</body>
+</html>"""
+    return html, 200
 
 
 @app.route('/webhook', methods=['POST'])
@@ -349,7 +553,8 @@ def webhook():
 
             open_position(
                 product_id, current_price, crypto_qty,
-                stop_price, target_price, sl_order_id, tp_order_id
+                stop_price, target_price, sl_order_id, tp_order_id,
+                quote_size, round(prob, 4)
             )
 
             return jsonify({
@@ -386,7 +591,7 @@ def webhook():
                 base_size=str(round(crypto_balance, 6))
             )
 
-            close_position(product_id)
+            close_position(product_id, exit_price=current_price, reason="signal")
 
             return jsonify({
                 "status":     "sell_executed",
