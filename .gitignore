@@ -6,4 +6,4 @@ simulated_balance.txt
 trade_log.csv
 venv/  # Virtual env
 __pycache__/
-*.pyc
+*.pyccoinbase.env
