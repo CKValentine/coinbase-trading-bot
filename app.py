@@ -35,7 +35,7 @@ PAIR_CONFIG = {
 }
 
 SUPPORTED_PAIRS    = list(PAIR_CONFIG.keys())
-RISK_PER_TRADE_PCT = 0.20
+RISK_PER_TRADE_PCT = 0.01
 STOP_LOSS_PCT      = 0.02
 TAKE_PROFIT_PCT    = 0.04
 
@@ -130,15 +130,8 @@ def fetch_candles(product_id: str, lookback_hours: int = 250) -> pd.DataFrame:
         end=str(int(time.time())),
         granularity='ONE_HOUR'
     )
-    candles = response['candles']
-    df = pd.DataFrame([{
-        'start':  c['start'],
-        'low':    c['low'],
-        'high':   c['high'],
-        'open':   c['open'],
-        'close':  c['close'],
-        'volume': c['volume']
-    } for c in candles])
+    df = pd.DataFrame(response['candles'])
+    df.columns = ['start', 'low', 'high', 'open', 'close', 'volume']
     for col in ['start', 'low', 'high', 'open', 'close', 'volume']:
         df[col] = pd.to_numeric(df[col])
     df['timestamp'] = pd.to_datetime(df['start'], unit='s')
@@ -201,34 +194,18 @@ def engineer_features(df: pd.DataFrame, pair_features: list) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def get_available_usd_balance() -> float:
-    cursor = None
-    while True:
-        kwargs = {'limit': 250}
-        if cursor:
-            kwargs['cursor'] = cursor
-        response = client.get_accounts(**kwargs)
-        for account in response['accounts']:
-            if account['currency'] == 'USD':
-                return float(account['available_balance']['value'])
-        if not response.get('has_next') or not response.get('cursor'):
-            break
-        cursor = response['cursor']
+    accounts = client.get_accounts()
+    for account in accounts['accounts']:
+        if account['currency'] == 'USD':
+            return float(account['available_balance']['value'])
     return 0.0
 
 
 def get_crypto_balance(base_currency: str) -> float:
-    cursor = None
-    while True:
-        kwargs = {'limit': 250}
-        if cursor:
-            kwargs['cursor'] = cursor
-        response = client.get_accounts(**kwargs)
-        for account in response['accounts']:
-            if account['currency'] == base_currency:
-                return float(account['available_balance']['value'])
-        if not response.get('has_next') or not response.get('cursor'):
-            break
-        cursor = response['cursor']
+    accounts = client.get_accounts()
+    for account in accounts['accounts']:
+        if account['currency'] == base_currency:
+            return float(account['available_balance']['value'])
     return 0.0
 
 
@@ -288,7 +265,7 @@ def webhook():
             return jsonify({"status": "insufficient_data"}), 400
 
         latest        = df[pair_features].iloc[-1:].copy()
-        prob          = float(model.predict_proba(latest)[0][1])
+        prob          = model.predict_proba(latest)[0][1]
         current_price = float(df['close'].iloc[-1])
 
         print(f"[{product_id}] action={action} prob={prob:.2%} price=${current_price:,.4f}")
