@@ -35,7 +35,7 @@ PAIR_CONFIG = {
 }
 
 SUPPORTED_PAIRS    = list(PAIR_CONFIG.keys())
-RISK_PER_TRADE_PCT = 0.01
+RISK_PER_TRADE_PCT = 0.20
 STOP_LOSS_PCT      = 0.02
 TAKE_PROFIT_PCT    = 0.04
 
@@ -201,18 +201,34 @@ def engineer_features(df: pd.DataFrame, pair_features: list) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def get_available_usd_balance() -> float:
-    accounts = client.get_accounts()
-    for account in accounts['accounts']:
-        if account['currency'] == 'USD':
-            return float(account['available_balance']['value'])
+    cursor = None
+    while True:
+        kwargs = {'limit': 250}
+        if cursor:
+            kwargs['cursor'] = cursor
+        response = client.get_accounts(**kwargs)
+        for account in response['accounts']:
+            if account['currency'] == 'USD':
+                return float(account['available_balance']['value'])
+        if not response.get('has_next') or not response.get('cursor'):
+            break
+        cursor = response['cursor']
     return 0.0
 
 
 def get_crypto_balance(base_currency: str) -> float:
-    accounts = client.get_accounts()
-    for account in accounts['accounts']:
-        if account['currency'] == base_currency:
-            return float(account['available_balance']['value'])
+    cursor = None
+    while True:
+        kwargs = {'limit': 250}
+        if cursor:
+            kwargs['cursor'] = cursor
+        response = client.get_accounts(**kwargs)
+        for account in response['accounts']:
+            if account['currency'] == base_currency:
+                return float(account['available_balance']['value'])
+        if not response.get('has_next') or not response.get('cursor'):
+            break
+        cursor = response['cursor']
     return 0.0
 
 
