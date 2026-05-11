@@ -130,8 +130,15 @@ def fetch_candles(product_id: str, lookback_hours: int = 250) -> pd.DataFrame:
         end=str(int(time.time())),
         granularity='ONE_HOUR'
     )
-    df = pd.DataFrame(response['candles'])
-    df.columns = ['start', 'low', 'high', 'open', 'close', 'volume']
+    candles = response['candles']
+    df = pd.DataFrame([{
+        'start':  c['start'],
+        'low':    c['low'],
+        'high':   c['high'],
+        'open':   c['open'],
+        'close':  c['close'],
+        'volume': c['volume']
+    } for c in candles])
     for col in ['start', 'low', 'high', 'open', 'close', 'volume']:
         df[col] = pd.to_numeric(df[col])
     df['timestamp'] = pd.to_datetime(df['start'], unit='s')
@@ -265,7 +272,7 @@ def webhook():
             return jsonify({"status": "insufficient_data"}), 400
 
         latest        = df[pair_features].iloc[-1:].copy()
-        prob          = model.predict_proba(latest)[0][1]
+        prob          = float(model.predict_proba(latest)[0][1])
         current_price = float(df['close'].iloc[-1])
 
         print(f"[{product_id}] action={action} prob={prob:.2%} price=${current_price:,.4f}")
