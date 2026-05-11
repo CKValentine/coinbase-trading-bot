@@ -33,7 +33,7 @@ PAIR_CONFIG = {
     "SOL-USD":  dict(buy_threshold=0.58, sell_threshold=0.52, risk_pct=0.20),
     "XRP-USD":  dict(buy_threshold=0.58, sell_threshold=0.52, risk_pct=0.20),
     "ADA-USD":  dict(buy_threshold=0.58, sell_threshold=0.52, risk_pct=0.10),
-    "LINK-USD": dict(buy_threshold=0.58, sell_threshold=0.52, risk_pct=0.20),
+    "LINK-USD": dict(buy_threshold=0.65, sell_threshold=0.52, risk_pct=0.15),
 }
 
 SUPPORTED_PAIRS = list(PAIR_CONFIG.keys())

@@ -130,6 +130,7 @@ def update_csv(pair, csv_file):
         df_new[col] = pd.to_numeric(df_new[col], errors='coerce')
 
     df_combined = pd.concat([df, df_new], ignore_index=True)
+    df_combined['timestamp'] = pd.to_datetime(df_combined['timestamp'])
     df_combined.drop_duplicates(subset='timestamp', inplace=True)
     df_combined.sort_values('timestamp', inplace=True)
     df_combined.to_csv(csv_file, index=False)
