@@ -28,10 +28,10 @@ TAKE_PROFIT_PCT = 0.04       # 4% take profit (2:1 R/R)
 
 SUPPORTED_PAIRS = ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "ADA-USD", "LINK-USD"]
 
-# Load models — one per pair
-models = {pair: joblib.load(f"model_{pair.replace('-', '_')}.pkl") for pair in SUPPORTED_PAIRS}
-
-FEATURES = ['log_return', 'atr_ratio', 'volume_ratio', 'rsi', 'rsi_slope', 'macd_diff']
+# Load models — each saved as {"model": ..., "features": [...]}
+_raw     = {pair: joblib.load(f"model_{pair.replace('-', '_')}.pkl") for pair in SUPPORTED_PAIRS}
+models   = {pair: _raw[pair]['model']    for pair in SUPPORTED_PAIRS}
+features = {pair: _raw[pair]['features'] for pair in SUPPORTED_PAIRS}
 
 
 def fetch_candles(product_id: str, lookback_hours: int = 50) -> pd.DataFrame:
@@ -119,7 +119,7 @@ def webhook():
         if df.empty or len(df) < 2:
             return jsonify({"status": "insufficient_data"}), 400
 
-        latest = df[FEATURES].iloc[-1:].copy()
+        latest = df[features[product_id]].iloc[-1:].copy()
         prob = model.predict_proba(latest)[0][1]
         current_price = float(df['close'].iloc[-1])
 
@@ -134,6 +134,7 @@ def webhook():
                     "prob": round(prob, 4)
                 }), 200
 
+            # FIX 2: position sizing from account balance, not raw payload
             usd_balance = get_available_usd_balance()
             quote_size = round(usd_balance * RISK_PER_TRADE_PCT, 2)
 
@@ -145,20 +146,25 @@ def webhook():
                 quote_size=str(quote_size)
             )
 
+            # FIX 3: place stop-loss and take-profit limit orders after buy fills
             stop_price  = round(current_price * (1 - STOP_LOSS_PCT), 4)
             target_price = round(current_price * (1 + TAKE_PROFIT_PCT), 4)
+
+            # Estimate crypto amount received (approximate — fill price may differ slightly)
             crypto_qty = round(quote_size / current_price, 6)
 
+            # Stop-loss: stop-limit sell
             try:
                 client.stop_limit_order_gtc_sell(
                     product_id=product_id,
                     base_size=str(crypto_qty),
-                    limit_price=str(round(stop_price * 0.995, 4)),
+                    limit_price=str(round(stop_price * 0.995, 4)),  # slight buffer below stop
                     stop_price=str(stop_price)
                 )
             except Exception as sl_err:
                 print(f"[{product_id}] Stop-loss order failed: {sl_err}")
 
+            # Take-profit: limit sell
             try:
                 client.limit_order_gtc_sell(
                     product_id=product_id,
@@ -179,7 +185,7 @@ def webhook():
                 "order_id": order.get('order_id', 'unknown')
             }), 200
 
-        # --- SELL logic ---
+        # --- SELL logic (FIX 4: now implemented) ---
         elif action == 'sell':
             if prob > SELL_CONFIDENCE_THRESHOLD:
                 return jsonify({

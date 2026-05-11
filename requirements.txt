@@ -8,5 +8,6 @@ joblib
 ta
 imbalanced-learn
 xgboost
-requests  # For API calls in download script
-ccxt  # For potential Kraken integration
+requests
+ccxt
+yfinance
